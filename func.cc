@@ -533,9 +533,7 @@ static void ShellFuncImpl(const string& shell, const string& cmd,
 static vector<CommandResult*> g_command_results;
 
 bool ShouldStoreCommandResult(StringPiece cmd) {
-  // We really just want to ignore this one, or remove BUILD_DATETIME from
-  // Android completely
-  if (cmd == "date +%s")
+  if (HasWord(cmd, "date") || HasWord(cmd, "echo"))
     return false;
 
   Pattern pat(g_flags.ignore_dirty_pattern);
