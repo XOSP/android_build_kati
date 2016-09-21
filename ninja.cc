@@ -184,7 +184,10 @@ class NinjaGenerator {
         start_time_(start_time),
         default_target_(NULL) {
     ev_->set_avoid_io(true);
-    shell_ = EscapeNinja(ev->EvalVar(kShellSym));
+    shell_ = EscapeNinja(ev->GetShell());
+    shell_flags_ = EscapeNinja(ev->GetShellFlag());
+    const string use_goma_str = ev->EvalVar(Intern("USE_GOMA"));
+    use_goma_ = !(use_goma_str.empty() || use_goma_str == "false");
     if (g_flags.goma_dir)
       gomacc_ = StringPrintf("%s/gomacc ", g_flags.goma_dir);
 
@@ -397,14 +400,6 @@ class NinjaGenerator {
                       const vector<Command*>& commands,
                       string* cmd_buf,
                       string* description) {
-    // TODO: This is a dirty hack to set local_pool even without
-    // --goma_dir or --remote_num_jobs which are not used in AOSP
-    // anymore. This won't set local_pool for targets which appear
-    // before the first command which uses gomacc. Fortunately, such
-    // command appears soon so almost all build targets have
-    // local_pool appropriately, but it's definitely better to come up
-    // with a more reliable solution.
-    static bool was_gomacc_found = false;
     bool got_descritpion = false;
     bool use_gomacc = false;
     auto command_count = commands.size();
@@ -446,7 +441,6 @@ class NinjaGenerator {
         }
       } else if (translated.find("/gomacc") != string::npos) {
         use_gomacc = true;
-        was_gomacc_found = true;
       }
 
       if (c->ignore_error) {
@@ -456,7 +450,7 @@ class NinjaGenerator {
       if (needs_subshell)
         *cmd_buf += " )";
     }
-    return (was_gomacc_found || g_flags.remote_num_jobs ||
+    return (use_goma_ || g_flags.remote_num_jobs ||
             g_flags.goma_dir) && !use_gomacc;
   }
 
@@ -489,6 +483,13 @@ class NinjaGenerator {
 
     string rule_name = "phony";
     bool use_local_pool = false;
+    if (node->output.get(0) == '.') {
+      return;
+    }
+    if (g_flags.enable_debug) {
+      *o << "# " << (node->loc.filename ? node->loc.filename : "(null)")
+         << ':' << node->loc.lineno << "\n";
+    }
     if (!commands.empty()) {
       rule_name = StringPrintf("rule%d", nn->rule_id);
       *o << "rule " << rule_name << "\n";
@@ -508,7 +509,8 @@ class NinjaGenerator {
         *o << " command = " << shell_ << " $out.rsp\n";
       } else {
         EscapeShell(&cmd_buf);
-        *o << " command = " << shell_ << " -c \"" << cmd_buf << "\"\n";
+        *o << " command = " << shell_ << ' ' << shell_flags_
+           << " \"" << cmd_buf << "\"\n";
       }
       if (node->is_restat) {
         *o << " restat = 1\n";
@@ -734,6 +736,7 @@ class NinjaGenerator {
     const vector<CommandResult*>& crs = GetShellCommandResults();
     DumpInt(fp, crs.size());
     for (CommandResult* cr : crs) {
+      DumpString(fp, cr->shell);
       DumpString(fp, cr->cmd);
       DumpString(fp, cr->result);
       if (!cr->find.get()) {
@@ -773,8 +776,10 @@ class NinjaGenerator {
   FILE* fp_;
   unordered_set<Symbol> done_;
   int rule_id_;
+  bool use_goma_;
   string gomacc_;
   string shell_;
+  string shell_flags_;
   map<string, string> used_envs_;
   string kati_binary_;
   const double start_time_;

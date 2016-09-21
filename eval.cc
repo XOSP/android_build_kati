@@ -34,7 +34,9 @@ Evaluator::Evaluator()
     : last_rule_(NULL),
       current_scope_(NULL),
       avoid_io_(false),
-      eval_depth_(0) {
+      eval_depth_(0),
+      posix_sym_(Intern(".POSIX")),
+      is_posix_(false) {
 }
 
 Evaluator::~Evaluator() {
@@ -48,6 +50,7 @@ Var* Evaluator::EvalRHS(Symbol lhs, Value* rhs_v, StringPiece orig_rhs,
                         AssignOp op, bool is_override) {
   VarOrigin origin = (
       (is_bootstrap_ ? VarOrigin::DEFAULT :
+       is_commandline_ ? VarOrigin::COMMAND_LINE :
        is_override ? VarOrigin::OVERRIDE : VarOrigin::FILE));
 
   Var* rhs = NULL;
@@ -101,7 +104,8 @@ void Evaluator::EvalAssign(const AssignStmt* stmt) {
   Var* rhs = EvalRHS(lhs, stmt->rhs, stmt->orig_rhs, stmt->op,
                      stmt->directive == AssignDirective::OVERRIDE);
   if (rhs)
-    lhs.SetGlobalVar(rhs);
+    lhs.SetGlobalVar(rhs,
+                     stmt->directive == AssignDirective::OVERRIDE);
 }
 
 void Evaluator::EvalRule(const RuleStmt* stmt) {
@@ -118,11 +122,19 @@ void Evaluator::EvalRule(const RuleStmt* stmt) {
 
   Rule* rule;
   RuleVarAssignment rule_var;
-  ParseRule(loc_, expr, stmt->term, &rule, &rule_var);
+  function<string()> after_term_fn = [this, stmt](){
+    return stmt->after_term ? stmt->after_term->Eval(this) : "";
+  };
+  ParseRule(loc_, expr, stmt->term, after_term_fn, &rule, &rule_var);
 
   if (rule) {
     if (stmt->term == ';') {
       rule->cmds.push_back(stmt->after_term);
+    }
+
+    for (Symbol o : rule->outputs) {
+      if (o == posix_sym_)
+        is_posix_ = true;
     }
 
     LOG("Rule: %s", rule->DebugString().c_str());
@@ -192,8 +204,7 @@ void Evaluator::EvalIf(const IfStmt* stmt) {
       if (lhs.str().find_first_of(" \t") != string::npos)
         Error("*** invalid syntax in conditional.");
       Var* v = LookupVarInCurrentScope(lhs);
-      const string&& s = v->Eval(this);
-      is_true = (s.empty() == (stmt->op == CondOp::IFNDEF));
+      is_true = (v->String().empty() == (stmt->op == CondOp::IFNDEF));
       break;
     }
     case CondOp::IFEQ:
@@ -252,7 +263,7 @@ void Evaluator::EvalInclude(const IncludeStmt* stmt) {
     for (const string& fname : *files) {
       if (!stmt->should_exist && g_flags.ignore_optional_include_pattern &&
           Pattern(g_flags.ignore_optional_include_pattern).Match(fname)) {
-        return;
+        continue;
       }
       DoInclude(fname);
     }
@@ -308,6 +319,22 @@ Var* Evaluator::LookupVarInCurrentScope(Symbol name) {
 
 string Evaluator::EvalVar(Symbol name) {
   return LookupVar(name)->Eval(this);
+}
+
+string Evaluator::GetShell() {
+  return EvalVar(kShellSym);
+}
+
+string Evaluator::GetShellFlag() {
+  // TODO: Handle $(.SHELLFLAGS)
+  return is_posix_ ? "-ec" : "-c";
+}
+
+string Evaluator::GetShellAndFlag() {
+  string shell = GetShell();
+  shell += ' ';
+  shell += GetShellFlag();
+  return shell;
 }
 
 void Evaluator::Error(const string& msg) {

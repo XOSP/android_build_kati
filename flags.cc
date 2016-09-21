@@ -16,6 +16,7 @@
 
 #include "flags.h"
 
+#include <stdlib.h>
 #include <unistd.h>
 
 #include "log.h"
@@ -52,6 +53,13 @@ void Flags::Parse(int argc, char** argv) {
   num_jobs = num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
   const char* num_jobs_str;
 
+  if (const char* makeflags = getenv("MAKEFLAGS")) {
+    for (StringPiece tok : WordScanner(makeflags)) {
+      if (!HasPrefix(tok, "-") && tok.find('=') != string::npos)
+        cl_vars.push_back(tok);
+    }
+  }
+
   for (int i = 1; i < argc; i++) {
     const char* arg = argv[i];
     bool should_propagate = true;
@@ -65,6 +73,8 @@ void Flags::Parse(int argc, char** argv) {
       is_dry_run = true;
     } else if (!strcmp(arg, "-s")) {
       is_silent_mode = true;
+    } else if (!strcmp(arg, "-d")) {
+      enable_debug = true;
     } else if (!strcmp(arg, "--kati_stats")) {
       enable_stat_logs = true;
     } else if (!strcmp(arg, "--warn")) {
@@ -76,10 +86,13 @@ void Flags::Parse(int argc, char** argv) {
     } else if (!strcmp(arg, "--regen")) {
       // TODO: Make this default.
       regen = true;
+    } else if (!strcmp(arg, "--regen_debug")) {
+      regen_debug = true;
     } else if (!strcmp(arg, "--regen_ignoring_kati_binary")) {
       regen_ignoring_kati_binary = true;
     } else if (!strcmp(arg, "--dump_kati_stamp")) {
       dump_kati_stamp = true;
+      regen_debug = true;
     } else if (!strcmp(arg, "--detect_android_echo")) {
       detect_android_echo = true;
     } else if (!strcmp(arg, "--detect_depfiles")) {

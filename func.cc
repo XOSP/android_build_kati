@@ -299,13 +299,18 @@ void JoinFunc(const vector<Value*>& args, Evaluator* ev, string* s) {
   WordScanner ws1(list1);
   WordScanner ws2(list2);
   WordWriter ww(s);
-  for (WordScanner::Iterator iter1 = ws1.begin(), iter2 = ws2.begin();
+  WordScanner::Iterator iter1, iter2;
+  for (iter1 = ws1.begin(), iter2 = ws2.begin();
        iter1 != ws1.end() && iter2 != ws2.end();
        ++iter1, ++iter2) {
     ww.Write(*iter1);
     // Use |AppendString| not to append extra ' '.
     AppendString(*iter2, s);
   }
+  for (; iter1 != ws1.end(); ++iter1)
+    ww.Write(*iter1);
+  for (; iter2 != ws2.end(); ++iter2)
+    ww.Write(*iter2);
 }
 
 void WildcardFunc(const vector<Value*>& args, Evaluator* ev, string* s) {
@@ -318,7 +323,6 @@ void WildcardFunc(const vector<Value*>& args, Evaluator* ev, string* s) {
   for (StringPiece tok : WordScanner(pat)) {
     ScopedTerminator st(tok);
     Glob(tok.data(), &files);
-    sort(files->begin(), files->end());
     for (const string& file : *files) {
       ww.Write(file);
     }
@@ -459,10 +463,6 @@ void EvalFunc(const vector<Value*>& args, Evaluator* ev, string*) {
   //const string text = args[0]->Eval(ev);
   string* text = new string;
   args[0]->Eval(ev, text);
-  if ((*text)[0] == '#') {
-    delete text;
-    return;
-  }
   if (ev->avoid_io()) {
     KATI_WARN("%s:%d: *warning*: $(eval) in a recipe is not recommended: %s",
               LOCF(ev->loc()), text->c_str());
@@ -533,7 +533,9 @@ static void ShellFuncImpl(const string& shell, const string& cmd,
 static vector<CommandResult*> g_command_results;
 
 bool ShouldStoreCommandResult(StringPiece cmd) {
-  if (HasWord(cmd, "date") || HasWord(cmd, "echo"))
+  // We really just want to ignore this one, or remove BUILD_DATETIME from
+  // Android completely
+  if (cmd == "date +%s")
     return false;
 
   Pattern pat(g_flags.ignore_dirty_pattern);
@@ -562,13 +564,14 @@ void ShellFunc(const vector<Value*>& args, Evaluator* ev, string* s) {
     return;
   }
 
-  const string&& shell = ev->EvalVar(kShellSym);
+  const string&& shell = ev->GetShellAndFlag();
 
   string out;
   FindCommand* fc = NULL;
   ShellFuncImpl(shell, cmd, &out, &fc);
   if (ShouldStoreCommandResult(cmd)) {
     CommandResult* cr = new CommandResult();
+    cr->shell = shell;
     cr->cmd = cmd;
     cr->find.reset(fc);
     cr->result = out;
@@ -583,11 +586,12 @@ void CallFunc(const vector<Value*>& args, Evaluator* ev, string* s) {
     Intern("5"), Intern("6"),  Intern("7"), Intern("8"), Intern("9")
   };
 
-  const string&& func_name = args[0]->Eval(ev);
+  const string&& func_name_buf = args[0]->Eval(ev);
+  const StringPiece func_name = TrimSpace(func_name_buf);
   Var* func = ev->LookupVar(Intern(func_name));
   if (!func->IsDefined()) {
     KATI_WARN("%s:%d: *warning*: undefined user function: %s",
-              ev->loc(), func_name.c_str());
+              ev->loc(), func_name.as_string().c_str());
   }
   vector<unique_ptr<SimpleVar>> av;
   for (size_t i = 1; i < args.size(); i++) {
