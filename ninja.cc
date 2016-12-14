@@ -561,8 +561,13 @@ class NinjaGenerator {
       }
     }
     *o << "\n";
-    if (use_local_pool)
+    if (node->ninja_pool_var) {
+      string pool;
+      node->ninja_pool_var->Eval(ev_, &pool);
+      *o << " pool = " << pool << "\n";
+    } else if (use_local_pool) {
       *o << " pool = local_pool\n";
+    }
     if (node->is_default_target) {
       unique_lock<mutex> lock(mu_);
       default_target_ = node;
@@ -736,31 +741,33 @@ class NinjaGenerator {
     const vector<CommandResult*>& crs = GetShellCommandResults();
     DumpInt(fp, crs.size());
     for (CommandResult* cr : crs) {
+      DumpInt(fp, static_cast<int>(cr->op));
       DumpString(fp, cr->shell);
+      DumpString(fp, cr->shellflag);
       DumpString(fp, cr->cmd);
       DumpString(fp, cr->result);
-      if (!cr->find.get()) {
-        // Always re-run this command.
-        DumpInt(fp, 0);
-        continue;
-      }
 
-      DumpInt(fp, 1);
+      if (cr->op == CommandOp::FIND) {
+        vector<string> missing_dirs;
+        for (StringPiece fd : cr->find->finddirs) {
+          const string& d = ConcatDir(cr->find->chdir, fd);
+          if (!Exists(d))
+            missing_dirs.push_back(d);
+        }
+        DumpInt(fp, missing_dirs.size());
+        for (const string& d : missing_dirs) {
+          DumpString(fp, d);
+        }
 
-      vector<string> missing_dirs;
-      for (StringPiece fd : cr->find->finddirs) {
-        const string& d = ConcatDir(cr->find->chdir, fd);
-        if (!Exists(d))
-          missing_dirs.push_back(d);
-      }
-      DumpInt(fp, missing_dirs.size());
-      for (const string& d : missing_dirs) {
-        DumpString(fp, d);
-      }
+        DumpInt(fp, cr->find->found_files->size());
+        for (StringPiece s : *cr->find->found_files) {
+          DumpString(fp, ConcatDir(cr->find->chdir, s));
+        }
 
-      DumpInt(fp, cr->find->read_dirs->size());
-      for (StringPiece s : *cr->find->read_dirs) {
-        DumpString(fp, ConcatDir(cr->find->chdir, s));
+        DumpInt(fp, cr->find->read_dirs->size());
+        for (StringPiece s : *cr->find->read_dirs) {
+          DumpString(fp, ConcatDir(cr->find->chdir, s));
+        }
       }
     }
 
